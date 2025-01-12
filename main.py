@@ -10,6 +10,9 @@ class GuitarTuner:
         self.kytara = pygame.image.load("images/guitar.png")
         self.pozadi = pygame.image.load("images/pozadi.jpg")
         self.pozadi2 = pygame.image.load("images/pozadi2.jpg")
+        self.sipka = pygame.image.load("images/arrow.png")
+        self.sipka = pygame.transform.scale(self.sipka, (90, 90))
+        self.sipka_reversed = pygame.transform.flip(self.sipka, True, False)
 
         # Initialize Pygame
         pygame.init()
@@ -18,6 +21,7 @@ class GuitarTuner:
         self.WIDTH = 1400
         self.HEIGHT = 900
         self.window = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
+        self.end_it = 1
 
         # Parameters for audio
         self.format = pyaudio.paInt16
@@ -26,12 +30,13 @@ class GuitarTuner:
         self.frames_za_buffer = 4000
         self.sekundy = 2
         self.stop_thread = False
+        self.mozek_thread = None
+        self.stream = None
         self.amplitude_threshold = 500
         self.moving_average_window = 3
         self.freq_history = []
 
-        # Parameters for the program
-        self.end_it = 1
+        # Fonty juchu
         self.font = pygame.font.Font("freesansbold.ttf", 32)
         self.font_1 = pygame.font.Font("freesansbold.ttf", 50)
         self.font_nota = pygame.font.Font("freesansbold.ttf", 170)
@@ -49,11 +54,62 @@ class GuitarTuner:
         self.stream = self.audio.open(format=self.format, channels=self.kanal,
                                       rate=self.RATE, input=True,
                                       frames_per_buffer=self.frames_za_buffer)
-
+        #promenne co se dale pouzivaji
         self.peak_freq = 0
         self.nejbliz = ("", 0)
         self.akce = 0
-        self.rozdil = ""
+        self.rozdil = 0
+
+        #Stoping el programmo
+        self.button_rect = pygame.Rect(50, 800, 200, 50)
+        self.tuning_active = True
+
+
+
+        #Frequency of strings
+        self.E2 = 82.41
+        self.A2 = 110.00
+        self.D3 = 146.83
+        self.G3 = 196.00
+        self.B3 = 246.94
+        self.E4 = 329.63
+
+        #dictionary of notes
+        self.tuning_status = {
+            "E3": False,
+            "A2": False,
+            "D3": False,
+            "G3": False,
+            "B3": False,
+            "E4": False
+        }
+    def Calculate_middle(self, a, b):
+        return (a + b) / 2
+
+    def button_click(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.button_rect.collidepoint(event.pos):
+                self.tuning_active = not self.tuning_active
+                if self.tuning_active:  # Resume
+                    self.stop_thread = False
+                    if self.stream is None or not self.stream.is_active():
+                        try:
+                            self.stream = self.audio.open(format=self.format, channels=self.kanal,
+                                                          rate=self.RATE, input=True,
+                                                          frames_per_buffer=self.frames_za_buffer)
+                            self.mozek_thread = threading.Thread(target=self.mozek)
+                            self.mozek_thread.start()
+                        except (OSError, ValueError) as e:
+                            print(f"Error opening stream: {e}")
+                else:  # Stop
+                    self.stop_thread = True
+                    if self.mozek_thread is not None:
+                        self.mozek_thread.join()
+                        self.mozek_thread = None
+                    if self.stream is not None:
+                        self.stream.stop_stream()
+                        self.stream.close()
+                        self.stream = None
 
     def Nejblizsi_Relevanti(self, pitch):
         if pitch <= 0 or not np.isfinite(pitch):
@@ -61,17 +117,15 @@ class GuitarTuner:
         i = int(np.round(np.log2(pitch / self.CONCERT_PITCH) * 12))
         closest_note = self.Vsechny_Noty[i % 12] + str(4 + (i + 9) // 12)
         closest_pitch = round(self.CONCERT_PITCH * 2 ** (i / 12), 2)
-        if closest_note in self.Relevanti_Noty:
-            return closest_note, closest_pitch
-        elif closest_pitch <= 96.205:
+        if closest_pitch <= self.E2:
             return "E3", 82.41
-        elif 96.20 < closest_pitch <= 128.41:
+        elif self.Calculate_middle(self.E2,self.A2) < closest_pitch <= self.Calculate_middle(self.A2,self.D3):
             return "A2", 110.00
-        elif 128.41 < closest_pitch <= 171.41:
+        elif self.Calculate_middle(self.A2,self.D3) < closest_pitch <= self.Calculate_middle(self.D3,self.G3):
             return "D3", 146.83
-        elif 171.41 < closest_pitch <= 221.47:
+        elif self.Calculate_middle(self.D3,self.G3)< closest_pitch <= self.Calculate_middle(self.G3,self.B3):
             return "G3", 196.00
-        elif 221.47 < closest_pitch <= 288.29:
+        elif self.Calculate_middle(self.G3,self.B3) < closest_pitch <= self.Calculate_middle(self.B3,self.E4):
             return "B3", 246.94
         else:
             return "E4", 329.63
@@ -79,13 +133,16 @@ class GuitarTuner:
     def Lazeni(self, pf, nejbliz):
         if abs(pf - nejbliz) < 0.5:
             self.akce = 0
+            self.tuning_status[self.nejbliz[0]] = True
             return "In tune"
         elif pf < nejbliz:
             self.akce = 1
-            return f"Too low by {round(nejbliz - pf, 3)} Hz"
+            self.rozdil = (round(nejbliz - pf,4))
+            return f"Too low by {self.rozdil} Hz"
         else:
             self.akce = 2
-            return f"Too high by {round(pf - nejbliz, 3)} Hz"
+            self.rozdil = (round(pf - nejbliz,4))
+            return f"Too high by {self.rozdil} Hz"
 
     def akce_lazeni(self):
         if self.akce == 0:
@@ -110,14 +167,28 @@ class GuitarTuner:
         b, a = butter(order, [low, high], btype='band')
         return lfilter(b, a, data)
 
+    def display_tuning_status(self):
+        y_offset = 440
+        for string, status in self.tuning_status.items():
+            status_text = "In tune" if status else "Out of tune"
+            text_surface = self.font.render(f"{string}: {status_text}", True, "white")
+            self.window.blit(text_surface, (50, y_offset))
+            y_offset += 40
+
+
+
     def mozek(self):
         amplitude_history = []  # Rolling amplitude history
-        stable_frequencies = []  # Stable frequencies
         stable_frames = 5
 
         while not self.stop_thread:
-            data = self.stream.read(self.frames_za_buffer, exception_on_overflow=False)
-            frames = np.frombuffer(data, dtype=np.int16)
+            if self.stream is not None and self.stream.is_active():
+                try:
+                    data = self.stream.read(self.frames_za_buffer, exception_on_overflow=False)
+                    frames = np.frombuffer(data, dtype=np.int16)
+                except (IOError, ValueError) as e:
+                    print(f"Error reading stream: {e}")
+                    break  # Exit loop on errors
 
             # Compute amplitude and check against threshold
             amplitude = np.max(np.abs(frames))
@@ -150,11 +221,11 @@ class GuitarTuner:
                 print(f"Peak frequency: {self.peak_freq} Hz")
                 self.nejbliz = self.Nejblizsi_Relevanti(self.peak_freq)
                 print(f"Closest note: {self.nejbliz}")
-                self.rozdil = self.Lazeni(self.peak_freq, self.nejbliz[1])
-                print(self.rozdil)
+                print(self.Lazeni(self.peak_freq, self.nejbliz[1]))
 
-        self.stream.stop_stream()
-        self.stream.close()
+        if self.stream is not None:
+            self.stream.stop_stream()
+            self.stream.close()
         self.audio.terminate()
 
     def run(self):
@@ -168,16 +239,16 @@ class GuitarTuner:
 
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
-                        ProgramBezi = False
                         self.stop_thread = True
-                        mozek_thread.join()
+                        if self.mozek_thread is not None:
+                            self.mozek_thread.join()
                         pygame.quit()
                         sys.exit()
-                    if event.type == pygame.MOUSEBUTTONDOWN and pygame.mouse.get_pressed()[0] is True:
-                        if areaStart.collidepoint(pygame.mouse.get_pos()):
-                            self.end_it = 0
+                    if event.type == pygame.MOUSEBUTTONDOWN and areaStart.collidepoint(event.pos):
+                        self.end_it = 0
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
                         self.end_it = 0
+
                 self.window.fill("white")
                 self.window.blit(self.pozadi, (0, 0))
                 text = self.font_1.render("Click here or", True, self.my_color)
@@ -191,28 +262,82 @@ class GuitarTuner:
                 pygame.display.flip()
                 self.clock.tick(self.FPS)
 
+
             while self.end_it == 0:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
-                        ProgramBezi = False
                         self.stop_thread = True
-                        mozek_thread.join()
+                        if self.mozek_thread is not None:
+                            self.mozek_thread.join()
                         pygame.quit()
                         sys.exit()
+                    self.button_click(event)
+
                 self.window.fill("black")
                 self.window.blit(self.pozadi2, (0, 0))
+
+               #Display tuning status
+                self.display_tuning_status()
+               #Draw button
+                pygame.draw.rect(self.window, (0, 255, 0), self.button_rect)
+                button_text = self.font.render("Stop" if self.tuning_active else "Resume", True, "black")
+                self.window.blit(button_text, (self.button_rect.x + 10, self.button_rect.y + 10))
+
+
                 # Texts to display
                 text = self.font.render(f"Peak freq: {self.peak_freq} Hz", True, "white")
                 text2 = self.font.render(f"Lazeni: {self.Lazeni(self.peak_freq, self.nejbliz[1])}", True, "white")
                 nejblizsitext = self.font_nota.render(f"{self.nejbliz[0]}", True, "black")
                 akce_text = self.font_akce.render(f"{self.akce_lazeni()}", True, "black")
-                rozdil_text = self.font_akce.render(self.rozdil, True, "black")
+                rozdil_text = self.font_1.render(f"{self.rozdil} Hz", True, "black")
+                hrane_text = self.font_1.render(f"{self.peak_freq}", True, "black")
+                nejblizsi_text = self.font_1.render(f"{self.nejbliz[1]}", True, "black")
+
+
                 # Display texts
                 self.window.blit(nejblizsitext, (110, 120))
                 self.window.blit(akce_text, (1020, 180))
-                self.window.blit(text, (self.WIDTH / 2, self.HEIGHT / 2))
-                self.window.blit(text2, (self.WIDTH / 2, self.HEIGHT / 2 + 100))
-                self.window.blit(rozdil_text, (self.WIDTH / 2, self.HEIGHT / 2 + 200))
+                self.window.blit(rozdil_text, (1040,370))
+                self.window.blit(hrane_text, (1040, 560))
+                self.window.blit(nejblizsi_text, (1040, 750))
+
+                #just checking
+                #self.window.blit(text, (self.WIDTH / 2, self.HEIGHT / 2))
+                #self.window.blit(text2, (self.WIDTH / 2, self.HEIGHT / 2 + 100))
+                """ Testovaci sipky a cary
+                self.window.blit(self.sipka, (420, 400))
+                self.window.blit(self.sipka, (420, 280))
+                self.window.blit(self.sipka, (420, 170))
+                self.window.blit(self.sipka_reversed, (960, 180))
+                self.window.blit(self.sipka_reversed, (960, 290))
+                self.window.blit(self.sipka_reversed, (960, 400))
+
+                pygame.draw.line(self.window, "red", (663, 591), (662, 900), 3)
+                pygame.draw.line(self.window, "red", (693, 591), (687, 900), 3)
+                pygame.draw.line(self.window, "red", (723, 591), (716, 900), 3)
+                pygame.draw.line(self.window, "red", (750, 591), (746, 900), 3)
+                pygame.draw.line(self.window, "red", (779, 591), (778, 900), 2)
+                pygame.draw.line(self.window, "red", (808, 591), (810, 900), 2)
+                """
+                #Draw struck string
+                if self.nejbliz[0] == "E3":
+                    pygame.draw.line(self.window, "red", (663,591), (662, 900), 4)
+                    self.window.blit(self.sipka, (420, 400))
+                elif self.nejbliz[0] == "A2":
+                    pygame.draw.line(self.window, "red", (693, 591), (687, 900), 4)
+                    self.window.blit(self.sipka, (420, 280))
+                elif self.nejbliz[0] == "D3":
+                    pygame.draw.line(self.window, "red", (723, 591), (716, 900), 4)
+                    self.window.blit(self.sipka, (420, 170))
+                elif self.nejbliz[0] == "G3":
+                    pygame.draw.line(self.window, "red", (750, 591), (746, 900), 3)
+                    self.window.blit(self.sipka_reversed, (960, 180))
+                elif self.nejbliz[0] == "B3":
+                    pygame.draw.line(self.window, "red", (779, 591), (778, 900), 2)
+                    self.window.blit(self.sipka_reversed, (960, 290))
+                elif self.nejbliz[0] == "E4":
+                    pygame.draw.line(self.window, "red", (808, 591), (810, 900), 2)
+                    self.window.blit(self.sipka_reversed, (960, 400))
 
                 pygame.display.flip()
                 self.clock.tick(self.FPS)
