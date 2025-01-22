@@ -36,13 +36,13 @@ class GuitarTuner:
         # Parameters for audio
         self.format = pyaudio.paInt16
         self.kanal = 1
-        self.RATE = 23000
-        self.frames_za_buffer = 4000
+        self.RATE = 23000 #toto
+        self.frames_za_buffer = 4000 #toto
         self.sekundy = 2
         self.stop_thread = False
         self.mozek_thread = None
         self.stream = None
-        self.amplitude_threshold = 500
+        self.amplitude_threshold = 650 #tohle
         self.moving_average_window = 3
         self.freq_history = []
 
@@ -96,6 +96,8 @@ class GuitarTuner:
     def Calculate_middle(self, a, b):
         return (a + b) / 2
 
+
+
     def button_click(self, event):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.button_rect.collidepoint(event.pos):
@@ -141,8 +143,9 @@ class GuitarTuner:
             return "E4", 329.63
 
     def Lazeni(self, pf, nejbliz):
-        if abs(pf - nejbliz) < 0.5:
+        if abs(pf - nejbliz) < 1:
             self.akce = 0
+            self.rozdil = 0
             self.tuning_status[self.nejbliz[0]] = True
             return "In tune"
         elif pf < nejbliz:
@@ -358,12 +361,6 @@ class GuitarTuner:
                     self.window.fill("black")
                     self.window.blit(self.pozadi2, (0, 0))
 
-                    pygame.draw.rect(self.window, "red", areaE2)
-                    pygame.draw.rect(self.window, "red", areaA2)
-                    pygame.draw.rect(self.window, "red", areaD3)
-                    pygame.draw.rect(self.window, "red", areaG3)
-                    pygame.draw.rect(self.window, "red", areaB3)
-                    pygame.draw.rect(self.window, "red", areaE4)
 
                     # Display tuning status
                     self.display_tuning_status()
